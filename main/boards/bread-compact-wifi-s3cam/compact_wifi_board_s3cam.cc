@@ -134,9 +134,13 @@ private:
         return "{\"user_name\":\"\",\"speech_speed\":\"normal\",\"preferences\":[],\"care_notes\":[]}";
     }
 
-    static cJSON* LoadUserProfile() {
+    static std::string LoadUserProfileJson() {
         Settings settings("user_memory", false);
-        auto profile_json = settings.GetString("profile", DefaultUserProfileJson());
+        return settings.GetString("profile", DefaultUserProfileJson());
+    }
+
+    static cJSON* LoadUserProfile() {
+        auto profile_json = LoadUserProfileJson();
         auto profile = cJSON_Parse(profile_json.c_str());
         if (!cJSON_IsObject(profile)) {
             if (profile) {
@@ -164,6 +168,26 @@ private:
         std::string result_string(result_json);
         cJSON_free(result_json);
         cJSON_Delete(result);
+        return result_string;
+    }
+
+    static std::string BuildUserProfileDebugResult() {
+        auto profile_json = LoadUserProfileJson();
+        auto profile = LoadUserProfile();
+        auto result = cJSON_CreateObject();
+        cJSON_AddBoolToObject(result, "success", true);
+        cJSON_AddStringToObject(result, "message", "user profile debug info loaded");
+        cJSON_AddStringToObject(result, "namespace", "user_memory");
+        cJSON_AddStringToObject(result, "key", "profile");
+        cJSON_AddNumberToObject(result, "stored_bytes", profile_json.size());
+        cJSON_AddStringToObject(result, "raw_json", profile_json.c_str());
+        cJSON_AddItemReferenceToObject(result, "profile", profile);
+
+        char* result_json = cJSON_PrintUnformatted(result);
+        std::string result_string(result_json);
+        cJSON_free(result_json);
+        cJSON_Delete(result);
+        cJSON_Delete(profile);
         return result_string;
     }
 
@@ -229,6 +253,30 @@ private:
 
                 SaveUserProfile(profile);
                 auto result = BuildUserProfileResult(true, "user profile updated", profile);
+                cJSON_Delete(profile);
+                return result;
+            });
+
+        mcp_server.AddTool(
+            "self.memory.debug_profile",
+            "调试工具：读取 ESP32 NVS 中保存的长期记忆原始 JSON、namespace、key 和字节数。"
+            "当用户要求“查看记忆原始数据”“调试记忆”“看看 NVS 里存了什么”“当前记忆 JSON 是什么”时调用此工具。"
+            "普通聊天时不要主动调用。",
+            PropertyList(),
+            [](const PropertyList&) -> ReturnValue {
+                return BuildUserProfileDebugResult();
+            });
+
+        mcp_server.AddTool(
+            "self.memory.clear_profile",
+            "清除工具：将 ESP32 NVS 中的用户长期记忆 profile 重置为空。"
+            "只有当用户明确要求“清空记忆”“删除记忆”“忘记我”“重置记忆”“清除 profile”时才调用此工具。"
+            "调用后必须告诉用户长期记忆已经清空。",
+            PropertyList(),
+            [](const PropertyList&) -> ReturnValue {
+                auto profile = cJSON_Parse(DefaultUserProfileJson().c_str());
+                SaveUserProfile(profile);
+                auto result = BuildUserProfileResult(true, "user profile cleared", profile);
                 cJSON_Delete(profile);
                 return result;
             });
