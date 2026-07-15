@@ -10,8 +10,10 @@
 #include "led/single_led.h"
 #include "esp32_camera.h"
 #include "settings.h"
+#include "robot_control_server.h"
 
 #include <esp_log.h>
+#include <esp_err.h>
 #include <driver/i2c_master.h>
 #include <esp_lcd_panel_vendor.h>
 #include <esp_lcd_panel_io.h>
@@ -20,7 +22,9 @@
 
 #include <algorithm>
 #include <cctype>
+#include <stdexcept>
 #include <string>
+#include <utility>
 
 #if defined(LCD_TYPE_ILI9341_SERIAL)
 #include "esp_lcd_ili9341.h"
@@ -121,14 +125,15 @@ private:
         },
         {
             "robot_motion",
-            "运动 前进 后退 左转 右转 停止 底盘",
-            "机器人运动控制建议后续通过独立 MCP 工具接入，例如前进、后退、左转、右转和停止。涉及安全时，应先确认周围环境再执行动作。"
+            "运动 前进 后退 蠕动 翻滚 停止 急停 归位 你好 表演",
+            "小蠖已经支持语音运动控制。可执行：向前蠕动、向后蠕动、向前翻滚、向后翻滚、开心/你好、安慰、停止/归位。执行时会调用本地 MCP 工具向小熊派发送带前缀的串口动作帧。"
         },
     };
  
     Button boot_button_;
     LcdDisplay* display_;
     Esp32Camera* camera_;
+    RobotControlServer robot_control_server_;
 
     static std::string DefaultUserProfileJson() {
         return "{\"user_name\":\"\",\"speech_speed\":\"normal\",\"preferences\":[],\"care_notes\":[]}";
@@ -370,6 +375,68 @@ private:
 
         ESP_LOGI(TAG, "RAG-lite MCP tools registered");
     }
+
+    static const char* RobotMotionName(int command) {
+        switch (command) {
+            case 0:
+                return "neutral_stop";
+            case 1:
+                return "crawl_forward";
+            case 2:
+                return "crawl_backward";
+            case 3:
+                return "roll_forward";
+            case 4:
+                return "roll_backward";
+            case 5:
+                return "happy_hello";
+            case 6:
+                return "comfort";
+            default:
+                return "unknown";
+        }
+    }
+
+    static cJSON* BuildRobotMotionResult(int command) {
+        auto result = cJSON_CreateObject();
+        cJSON_AddBoolToObject(result, "success", true);
+        cJSON_AddNumberToObject(result, "command", command);
+        cJSON_AddStringToObject(result, "action", RobotMotionName(command));
+        std::string payload = "XH," + std::to_string(command) + "\\n";
+        cJSON_AddStringToObject(result, "uart_payload", payload.c_str());
+        return result;
+    }
+
+    void InitializeRobotTools() {
+        auto& mcp_server = McpServer::GetInstance();
+
+        mcp_server.AddTool(
+            "self.robot.move",
+            "控制小蠖机器人运动。"
+            "当用户通过语音要求机器人运动、蠕动、停止、归位、翻滚、打招呼或表演时，必须调用此工具。"
+            "参数 command 是动作编号，固件会向小熊派发送 XH,N 换行结尾的串口动作帧："
+            "0=停止/中立/归位/紧急停止；"
+            "1=向前蠕动/向前运动/前进/往前走；"
+            "2=向后蠕动/后退/往后走；"
+            "3=向前翻滚/前滚/翻滚；"
+            "4=向后翻滚/后滚；"
+            "5=开心/你好/打招呼/简单表演；"
+            "6=安慰。"
+            "如果用户说“停下”“别动”“急停”，优先使用 command=0。",
+            PropertyList({
+                Property("command", kPropertyTypeInteger, 0, 6)
+            }),
+            [this](const PropertyList& properties) -> ReturnValue {
+                int command = properties["command"].value<int>();
+                esp_err_t err = robot_control_server_.SendMotionCommand(command);
+                if (err != ESP_OK) {
+                    throw std::runtime_error(std::string("failed to send robot motion command: ") + esp_err_to_name(err));
+                }
+                return BuildRobotMotionResult(command);
+            });
+
+        ESP_LOGI(TAG, "Robot motion MCP tool registered");
+    }
  
     void InitializeSpi() {
         spi_bus_config_t buscfg = {};
@@ -478,6 +545,7 @@ public:
         InitializeCamera();
         InitializeMemoryTools();
         InitializeRagTools();
+        InitializeRobotTools();
         if (DISPLAY_BACKLIGHT_PIN != GPIO_NUM_NC) {
             GetBacklight()->RestoreBrightness();
         }
@@ -514,6 +582,16 @@ public:
 
     virtual Camera* GetCamera() override {
         return camera_;
+    }
+    virtual void SetNetworkEventCallback(NetworkEventCallback callback) override {
+        WifiBoard::SetNetworkEventCallback([this, callback = std::move(callback)](NetworkEvent event, const std::string& data) {
+            if (callback) {
+                callback(event, data);
+            }
+            if (event == NetworkEvent::Connected) {
+                robot_control_server_.StartAsync();
+            }
+        });
     }
 };
 
