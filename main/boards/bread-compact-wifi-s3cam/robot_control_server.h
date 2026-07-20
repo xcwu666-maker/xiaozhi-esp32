@@ -1,6 +1,8 @@
 #ifndef ROBOT_CONTROL_SERVER_H
 #define ROBOT_CONTROL_SERVER_H
 
+#include "servo_motion_controller.h"
+
 #include <esp_err.h>
 #include <esp_http_server.h>
 #include <esp_netif.h>
@@ -37,6 +39,7 @@ private:
     bool started_ = false;
     bool uart_initialized_ = false;
     SemaphoreHandle_t uart_mutex_ = nullptr;
+    ServoMotionController servo_motion_controller_;
 };
 
 #endif // ROBOT_CONTROL_SERVER_H

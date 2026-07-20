@@ -7,7 +7,7 @@
 #include "config.h"
 #include "mcp_server.h"
 #include "lamp_controller.h"
-#include "led/single_led.h"
+#include "led/led.h"
 #include "esp32_camera.h"
 #include "settings.h"
 #include "robot_control_server.h"
@@ -126,7 +126,7 @@ private:
         {
             "robot_motion",
             "运动 前进 后退 蠕动 翻滚 停止 急停 归位 你好 表演",
-            "小蠖已经支持语音运动控制。可执行：向前蠕动、向后蠕动、向前翻滚、向后翻滚、开心/你好、安慰、停止/归位。执行时会调用本地 MCP 工具向小熊派发送带前缀的串口动作帧。"
+            "小蠖已经支持语音运动控制。可执行：向前蠕动、向后蠕动、向前翻滚、向后翻滚、开心/你好、安慰、停止/归位。执行时会调用本地 MCP 工具，由 ESP32-S3 直接向舵机控制器发送动作帧。"
         },
     };
  
@@ -402,8 +402,8 @@ private:
         cJSON_AddBoolToObject(result, "success", true);
         cJSON_AddNumberToObject(result, "command", command);
         cJSON_AddStringToObject(result, "action", RobotMotionName(command));
-        std::string payload = "XH," + std::to_string(command) + "\\n";
-        cJSON_AddStringToObject(result, "uart_payload", payload.c_str());
+        cJSON_AddStringToObject(result, "mode", "direct_servo_controller");
+        cJSON_AddStringToObject(result, "uart_payload", "0x55 0x55 multi-servo frame");
         return result;
     }
 
@@ -414,7 +414,7 @@ private:
             "self.robot.move",
             "控制小蠖机器人运动。"
             "当用户通过语音要求机器人运动、蠕动、停止、归位、翻滚、打招呼或表演时，必须调用此工具。"
-            "参数 command 是动作编号，固件会向小熊派发送 XH,N 换行结尾的串口动作帧："
+            "参数 command 是动作编号，固件会直接向舵机控制器发送 0x55 0x55 多舵机动作帧："
             "0=停止/中立/归位/紧急停止；"
             "1=向前蠕动/向前运动/前进/往前走；"
             "2=向后蠕动/后退/往后走；"
@@ -553,7 +553,7 @@ public:
     }
 
     virtual Led* GetLed() override {
-        static SingleLed led(BUILTIN_LED_GPIO);
+        static NoLed led;
         return &led;
     }
 

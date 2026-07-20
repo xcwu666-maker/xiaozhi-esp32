@@ -27,6 +27,11 @@ constexpr int kBearPiTxPin = GPIO_NUM_43;
 constexpr int kBearPiRxPin = UART_PIN_NO_CHANGE;
 constexpr int kBearPiBaudRate = 9600;
 
+constexpr uart_port_t kDirectServoUart = UART_NUM_2;
+constexpr int kDirectServoTxPin = GPIO_NUM_48;
+constexpr int kDirectServoRxPin = UART_PIN_NO_CHANGE;
+constexpr int kDirectServoBaudRate = 9600;
+
 constexpr const char* kHtmlHomePage = R"HTML(
 <!doctype html>
 <html lang="zh-CN">
@@ -168,7 +173,6 @@ esp_err_t RobotControlServer::Start() {
         return ESP_OK;
     }
 
-    ESP_RETURN_ON_ERROR(InitializeUart(), TAG, "initialize UART failed");
     ESP_RETURN_ON_ERROR(StartAccessPoint(), TAG, "start AP failed");
     ESP_RETURN_ON_ERROR(StartWebServer(), TAG, "start HTTP server failed");
 
@@ -304,7 +308,7 @@ esp_err_t RobotControlServer::RootHandler(httpd_req_t* req) {
 
 esp_err_t RobotControlServer::StatusHandler(httpd_req_t* req) {
     auto* self = static_cast<RobotControlServer*>(req->user_ctx);
-    char json[384];
+    char json[512];
     self->BuildStatusJson(json, sizeof(json));
     httpd_resp_set_type(req, "application/json");
     httpd_resp_set_hdr(req, "Cache-Control", "no-store");
@@ -367,13 +371,18 @@ esp_err_t RobotControlServer::HandleCommand(const char* command) {
     return ESP_ERR_INVALID_ARG;
 }
 
-esp_err_t RobotControlServer::SendMoveCommand(int command) {
-    return SendMotionCommand(command);
-}
-
 esp_err_t RobotControlServer::SendMotionCommand(int command) {
     if (command < 0 || command > 6) {
         ESP_LOGW(TAG, "Servo command out of range: %d", command);
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    return servo_motion_controller_.ExecuteCommand(command);
+}
+
+esp_err_t RobotControlServer::SendMoveCommand(int command) {
+    if (command < 0 || command > 6) {
+        ESP_LOGW(TAG, "BearPi servo command out of range: %d", command);
         return ESP_ERR_INVALID_ARG;
     }
 
@@ -409,12 +418,17 @@ void RobotControlServer::BuildStatusJson(char* buffer, size_t buffer_size) const
                   "{\"ap\":{\"ssid\":\"%s\",\"ip\":\"192.168.4.1\",\"clients\":%d},"
                   "\"sta\":{\"connected\":%s,\"ssid\":\"%s\",\"ip\":\"%s\"},"
                   "\"camera\":{\"url\":\"http://192.168.4.3/\",\"result_ws\":\"ws://192.168.4.3/Result\"},"
-                  "\"bearpi\":{\"uart\":%d,\"tx\":%d,\"rx\":%d,\"baud\":%d,\"protocol\":\"XH,N\\\\n\"}}",
+                  "\"motion\":{\"mode\":\"direct_servo_controller\",\"uart\":%d,\"tx\":%d,\"rx\":%d,\"baud\":%d,\"protocol\":\"0x55 0x55 multi-servo\"},"
+                  "\"bearpi\":{\"retained\":true,\"active\":false,\"uart\":%d,\"tx\":%d,\"rx\":%d,\"baud\":%d,\"protocol\":\"XH,N\\\\n\"}}",
                   kApSsid,
                   sta_err == ESP_OK ? sta_list.num : 0,
                   wifi.IsConnected() ? "true" : "false",
                   wifi.GetSsid().c_str(),
                   wifi.GetIpAddress().c_str(),
+                  static_cast<int>(kDirectServoUart),
+                  static_cast<int>(kDirectServoTxPin),
+                  static_cast<int>(kDirectServoRxPin),
+                  kDirectServoBaudRate,
                   static_cast<int>(kBearPiUart),
                   static_cast<int>(kBearPiTxPin),
                   static_cast<int>(kBearPiRxPin),
